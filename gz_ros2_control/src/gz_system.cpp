@@ -88,6 +88,14 @@ struct MimicJoint
   std::vector<std::string> interfaces_to_mimic;
 };
 
+struct GPIOData
+{
+  std::string name;
+  std::vector<std::string> state_interface_names;
+  std::vector<double> states;
+  std::vector<double> mock_commands;
+};
+
 class ForceTorqueData
 {
 public:
@@ -166,8 +174,7 @@ public:
   std::vector<struct jointData> joints_;
 
   /// \brief
-  std::vector<double> gpio_states_;
-  std::vector<double> gpio_commands_;
+  std::vector<struct GPIOData> gpios_;
 
   /// \brief vector with the imus .
   std::vector<std::shared_ptr<ImuData>> imus_;
@@ -433,47 +440,58 @@ bool GazeboSimSystem::initSim(
   }
 
   registerSensors(hardware_info);
+  registerGPIOs(hardware_info);
 
+  return true;
+}
 
-  // Register GPIOs
+void GazeboSimSystem::registerGPIOs(
+  const hardware_interface::HardwareInfo & hardware_info)
+{
   size_t n_gpios = hardware_info.gpios.size();
-  std::cout << "=======> GPIO size: "<< n_gpios << std::endl;
-  this->dataPtr->gpio_states_.resize(n_gpios);
+  this->dataPtr->gpios_.resize(n_gpios);
 
   for (unsigned int j = 0; j < n_gpios; j++) {
     hardware_interface::ComponentInfo component = hardware_info.gpios[j];
 
-    RCLCPP_INFO_STREAM(this->nh_->get_logger(), "Loading GPIO: " << component.name);
-    
+    this->dataPtr->gpios_[j].name = component.name;
+    RCLCPP_INFO_STREAM(this->nh_->get_logger(), "Loading GPIO: " << this->dataPtr->gpios_[j].name);
+
     RCLCPP_INFO_STREAM(this->nh_->get_logger(), "\tState:");
     for (const auto & state_interface : component.state_interfaces) {
-        RCLCPP_INFO_STREAM(this->nh_->get_logger(), "\t\t " << state_interface.name);
+      // get interface name
+      auto state_interface_name = state_interface.name;
+      RCLCPP_INFO_STREAM(this->nh_->get_logger(), "\t\t " << state_interface.name);
+      this->dataPtr->gpios_[j].state_interface_names.push_back(state_interface_name);
+      // get initial value
+      double initial_value = 0.0;
+      if(!state_interface.initial_value.empty()){
+        initial_value = hardware_interface::stod(state_interface.initial_value);
+        RCLCPP_INFO(this->nh_->get_logger(), "\t\t\t found initial value: %f", initial_value);
+      }      
+      this->dataPtr->gpios_[j].states.push_back(initial_value);  
+    }
 
-        // get initial value
-        this->dataPtr->gpio_states_[j] = std::stod(state_interface.initial_value);
-        RCLCPP_INFO(this->nh_->get_logger(), "\t\t\t found initial value: %f", this->dataPtr->gpio_states_[j]);
+    // register state interfaces
+    auto n_state_interfaces = this->dataPtr->gpios_[j].state_interface_names.size();
+    for (size_t i = 0; i < n_state_interfaces; i++)
+      this->dataPtr->state_interfaces_.emplace_back(
+        this->dataPtr->gpios_[j].name,
+        this->dataPtr->gpios_[j].state_interface_names[i],
+        &this->dataPtr->gpios_[j].states[i]); 
 
-        // register state interface
-        this->dataPtr->state_interfaces_.emplace_back(
-          component.name,
-          state_interface.name.c_str(),
-          &this->dataPtr->gpio_states_[j]);
-      }
-    
-    RCLCPP_INFO_STREAM(this->nh_->get_logger(), "\tCommand:");
-    for (const auto & command_interface : component.command_interfaces) {
-        RCLCPP_INFO_STREAM(this->nh_->get_logger(), "\t\t " << command_interface.name);
-
-        // register state interface
-        this->dataPtr->command_interfaces_.emplace_back(
-          component.name,
-          command_interface.name.c_str(),
-          &this->dataPtr->gpio_commands_[j]);
-      }
+    // register command interfaces
+    this->dataPtr->gpios_[j].mock_commands.resize(n_state_interfaces);
+    RCLCPP_INFO_STREAM(this->nh_->get_logger(), "\tCommand: (mocked)");
+    for (size_t i = 0; i < n_state_interfaces; i++){
+      // mock gpio - register command interfaces under the same names as state
+      RCLCPP_INFO_STREAM(this->nh_->get_logger(), "\t\t " << this->dataPtr->gpios_[j].state_interface_names[i]);
+      this->dataPtr->command_interfaces_.emplace_back(
+        this->dataPtr->gpios_[j].name,
+        this->dataPtr->gpios_[j].state_interface_names[i],
+        &this->dataPtr->gpios_[j].mock_commands[i]); 
+    }    
   }
-
-
-  return true;
 }
 
 void GazeboSimSystem::registerSensors(
@@ -698,6 +716,11 @@ hardware_interface::return_type GazeboSimSystem::read(
           this->dataPtr->ft_sensors_[i].get());
       }
     }
+  }
+
+  // mirror gpio commands to states
+  for (unsigned int i = 0; i < this->dataPtr->gpios_.size(); ++i) {
+    this->dataPtr->gpios_[i].states = this->dataPtr->gpios_[i].mock_commands;
   }
 
   return hardware_interface::return_type::OK;
