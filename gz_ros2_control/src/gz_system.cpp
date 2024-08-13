@@ -165,6 +165,10 @@ public:
   /// \brief vector with the joint's names.
   std::vector<struct jointData> joints_;
 
+  /// \brief
+  std::vector<double> gpio_states_;
+  std::vector<double> gpio_commands_;
+
   /// \brief vector with the imus .
   std::vector<std::shared_ptr<ImuData>> imus_;
 
@@ -429,6 +433,45 @@ bool GazeboSimSystem::initSim(
   }
 
   registerSensors(hardware_info);
+
+
+  // Register GPIOs
+  size_t n_gpios = hardware_info.gpios.size();
+  std::cout << "=======> GPIO size: "<< n_gpios << std::endl;
+  this->dataPtr->gpio_states_.resize(n_gpios);
+
+  for (unsigned int j = 0; j < n_gpios; j++) {
+    hardware_interface::ComponentInfo component = hardware_info.gpios[j];
+
+    RCLCPP_INFO_STREAM(this->nh_->get_logger(), "Loading GPIO: " << component.name);
+    
+    RCLCPP_INFO_STREAM(this->nh_->get_logger(), "\tState:");
+    for (const auto & state_interface : component.state_interfaces) {
+        RCLCPP_INFO_STREAM(this->nh_->get_logger(), "\t\t " << state_interface.name);
+
+        // get initial value
+        this->dataPtr->gpio_states_[j] = std::stod(state_interface.initial_value);
+        RCLCPP_INFO(this->nh_->get_logger(), "\t\t\t found initial value: %f", this->dataPtr->gpio_states_[j]);
+
+        // register state interface
+        this->dataPtr->state_interfaces_.emplace_back(
+          component.name,
+          state_interface.name.c_str(),
+          &this->dataPtr->gpio_states_[j]);
+      }
+    
+    RCLCPP_INFO_STREAM(this->nh_->get_logger(), "\tCommand:");
+    for (const auto & command_interface : component.command_interfaces) {
+        RCLCPP_INFO_STREAM(this->nh_->get_logger(), "\t\t " << command_interface.name);
+
+        // register state interface
+        this->dataPtr->command_interfaces_.emplace_back(
+          component.name,
+          command_interface.name.c_str(),
+          &this->dataPtr->gpio_commands_[j]);
+      }
+  }
+
 
   return true;
 }
